@@ -39,6 +39,8 @@ Custom Tools
   ├── Weather Tool
   ├── Indian Movie Search
   └── Temperature Converter
+
+
 ## 🚀 How It Works
 
 The user sends a query to the AI agent through the FastAPI application.
