@@ -40,6 +40,9 @@ Custom Tools
   ├── Indian Movie Search
   └── Temperature Converter
 
+**three backtick characters:**
+
+```text
 
 ## 🚀 How It Works
 
