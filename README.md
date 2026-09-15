@@ -1,8 +1,6 @@
 # Indian Weather & Cinema AI Agent
 
 An AI-powered agent built with Python, LangChain, Gemini, and FastAPI.
-The agent is designed to handle Indian weather and cinema-related
-queries using custom tools and external APIs.
 
 ## 🚀 Features
 
@@ -17,7 +15,7 @@ queries using custom tools and external APIs.
 
 - Python
 - LangChain
-- Google Gemini / Generative AI
+- Google Gemini
 - FastAPI
 - LangServe
 - Pydantic
@@ -26,7 +24,6 @@ queries using custom tools and external APIs.
 
 ## 🏗️ Project Architecture
 
-```text
 User
   ↓
 FastAPI
