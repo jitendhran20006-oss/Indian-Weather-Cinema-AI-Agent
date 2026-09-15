@@ -24,6 +24,7 @@ An AI-powered agent built with Python, LangChain, Gemini, and FastAPI.
 
 ## 🏗️ Project Architecture
 
+```text
 User
   ↓
 FastAPI
@@ -36,6 +37,8 @@ Custom Tools
   ├── Weather Tool
   ├── Indian Movie Search
   └── Temperature Converter
+```
+
 
 ## 🚀 How It Works
 
