@@ -1,7 +1,6 @@
 import os
-import json
-import requests
 import uvicorn
+import requests
 
 from fastapi import FastAPI
 from langserve import add_routes
@@ -13,7 +12,7 @@ from langchain_core.runnables import RunnableLambda
 
 
 # ============================================================
-# 1. MOVIE TOOL
+# MOVIE TOOL
 # ============================================================
 
 @tool
@@ -23,9 +22,7 @@ def search_movies(genre: str) -> str:
     movies = {
         "sci-fi": "Cargo, 2.0, Mr. India",
         "comedy": "3 Idiots, Hera Pheri, Munna Bhai M.B.B.S.",
-        "action": "RRR, Vikram, Baahubali",
-        "romance": "Jab We Met, Veer-Zaara, Sita Ramam",
-        "thriller": "Drishyam, Andhadhun, Ratsasan"
+        "action": "RRR, Vikram, Baahubali"
     }
 
     return movies.get(
@@ -35,7 +32,7 @@ def search_movies(genre: str) -> str:
 
 
 # ============================================================
-# 2. TEMPERATURE CONVERSION TOOL
+# TEMPERATURE CONVERSION TOOL
 # ============================================================
 
 @tool
@@ -46,63 +43,94 @@ def change_to_f(temp_c: float) -> float:
 
 
 # ============================================================
-# 3. WEATHER TOOL
+# WEATHER TOOL - OPEN-METEO
 # ============================================================
 
 @tool
 def get_weather(city: str) -> str:
-    """Get current weather for a given city."""
-
-    weather_api_key = os.environ.get("WEATHER_API_KEY")
-
-    if not weather_api_key:
-        return "Weather API key is not configured."
-
-    weather_url = "https://api.weatherapi.com/v1/current.json"
-
-    weather_params = {
-        "key": weather_api_key,
-        "q": city,
-        "aqi": "no"
-    }
+    """Get current weather for a city using Open-Meteo."""
 
     try:
+        # Step 1: Find city coordinates
+        geo_url = "https://geocoding-api.open-meteo.com/v1/search"
 
-        response = requests.get(
+        geo_params = {
+            "name": city,
+            "count": 1,
+            "language": "en",
+            "format": "json"
+        }
+
+        geo_response = requests.get(
+            geo_url,
+            params=geo_params,
+            timeout=10
+        )
+
+        geo_response.raise_for_status()
+
+        geo_data = geo_response.json()
+
+        if "results" not in geo_data or not geo_data["results"]:
+            return f"Could not find the city: {city}"
+
+        location = geo_data["results"][0]
+
+        latitude = location["latitude"]
+        longitude = location["longitude"]
+        city_name = location["name"]
+
+        # Step 2: Get current weather
+        weather_url = "https://api.open-meteo.com/v1/forecast"
+
+        weather_params = {
+            "latitude": latitude,
+            "longitude": longitude,
+            "current": "temperature_2m,weather_code",
+            "temperature_unit": "celsius"
+        }
+
+        weather_response = requests.get(
             weather_url,
             params=weather_params,
             timeout=10
         )
 
-        response.raise_for_status()
+        weather_response.raise_for_status()
 
-        weather_data = response.json()
-
-        if "current" not in weather_data:
-            return f"Could not retrieve weather data for {city}"
+        weather_data = weather_response.json()
 
         current = weather_data["current"]
 
-        result = {
-            "resolved_city": weather_data["location"]["name"],
-            "country": weather_data["location"]["country"],
-            "temperature_celsius": current["temp_c"],
-            "condition": current["condition"]["text"],
-            "humidity": current["humidity"],
-            "wind_kph": current["wind_kph"]
-        }
+        temperature = current["temperature_2m"]
+        weather_code = current["weather_code"]
 
-        return json.dumps(result)
+        return (
+            f"The current temperature in {city_name} is "
+            f"{temperature}°C. "
+            f"Weather code: {weather_code}."
+        )
 
-    except requests.RequestException as e:
+    except requests.exceptions.RequestException as e:
         return f"Weather service error: {str(e)}"
 
     except Exception as e:
-        return f"Could not retrieve weather data: {str(e)}"
+        return f"Weather error: {str(e)}"
 
 
 # ============================================================
-# 4. GEMINI API KEY
+# TOOLS
+# ============================================================
+
+tools = [
+    get_weather,
+    search_movies,
+    change_to_f
+]
+
+
+# ============================================================
+# GEMINI API
 # ============================================================
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -113,10 +141,6 @@ if not GEMINI_API_KEY:
     )
 
 
-# ============================================================
-# 5. GEMINI MODEL
-# ============================================================
-
 llm_flash = ChatGoogleGenerativeAI(
     model="gemma-4-31b-it",
     api_key=GEMINI_API_KEY,
@@ -125,34 +149,17 @@ llm_flash = ChatGoogleGenerativeAI(
 
 
 # ============================================================
-# 6. AI AGENT
+# AI AGENT
 # ============================================================
-
-tools = [
-    get_weather,
-    search_movies,
-    change_to_f
-]
-
 
 agent = create_agent(
     model=llm_flash,
     tools=tools,
     system_prompt=(
-        "You are an Indian Weather and Cinema AI Agent. "
-
-        "You can answer questions about Indian weather and Indian movies. "
-
-        "For weather questions, use the get_weather tool. "
-
-        "For movie questions, use the search_movies tool. "
-
-        "For Celsius to Fahrenheit conversion, use the change_to_f tool. "
-
-        "Do not answer unrelated general knowledge questions. "
-
-        "For questions outside Indian weather and cinema, say exactly: "
-
+        "You are a specialized AI agent restricted to Indian weather "
+        "and Indian cinema-related questions. "
+        "Use the available tools when appropriate. "
+        "For questions outside Indian weather and cinema, say: "
         "'I am not authorized to answer questions outside of Indian "
         "weather and cinema.'"
     )
@@ -160,138 +167,25 @@ agent = create_agent(
 
 
 # ============================================================
-# 7. INPUT MODEL
+# INPUT MODEL
 # ============================================================
 
 class AgentInput(BaseModel):
-
     input: str = Field(
-        description="Your message to the AI agent"
+        description="Your message to the agent"
     )
 
 
 # ============================================================
-# 8. PROCESS USER REQUEST
+# FORMAT INPUT
 # ============================================================
 
-def process_request(x):
-
-    if isinstance(x, dict):
-        user_input = x["input"]
-    else:
-        user_input = x.input
-
-    text = user_input.lower().strip()
-
-    # --------------------------------------------------------
-    # WEATHER REQUEST
-    # --------------------------------------------------------
-
-    weather_words = [
-        "weather",
-        "temperature",
-        "forecast",
-        "climate"
-    ]
-
-    if any(word in text for word in weather_words):
-
-        # Try to identify the city from common phrases
-
-        city = None
-
-        phrases = [
-            "weather in ",
-            "weather of ",
-            "temperature in ",
-            "temperature of ",
-            "forecast in ",
-            "forecast of "
-        ]
-
-        for phrase in phrases:
-
-            if phrase in text:
-
-                city = text.split(phrase, 1)[1].strip()
-
-                # Remove question marks
-                city = city.replace("?", "").strip()
-
-                break
-
-        # If city was not detected
-        if not city:
-
-            return {
-                "messages": [
-                    (
-                        "assistant",
-                        "Please specify the city you want the weather for."
-                    )
-                ]
-            }
-
-        # Call weather tool directly
-        weather_result = get_weather.invoke(city)
-
-        # ----------------------------------------------------
-        # Convert JSON weather result into readable response
-        # ----------------------------------------------------
-
-        try:
-
-            weather_data = json.loads(weather_result)
-
-            city_name = weather_data.get(
-                "resolved_city",
-                city.title()
-            )
-
-            temperature = weather_data.get(
-                "temperature_celsius",
-                "N/A"
-            )
-
-            condition = weather_data.get(
-                "condition",
-                "N/A"
-            )
-
-            humidity = weather_data.get(
-                "humidity",
-                "N/A"
-            )
-
-            wind = weather_data.get(
-                "wind_kph",
-                "N/A"
-            )
-
-            answer = (
-                f"The current weather in {city_name} is "
-                f"{temperature}°C with {condition}. "
-                f"Humidity is {humidity}% and wind speed is "
-                f"{wind} km/h."
-            )
-
-            return {
-                "messages": [
-                    ("assistant", answer)
-                ]
-            }
-
-        except Exception:
-
-            return {
-                "messages": [
-                    ("assistant", weather_result)
-                ]
-            }
-
-    # --------------------------------------------------------
-    # OTHER REQUESTS → AI AGENT
-    # --------------------------------------------------------
+def format_for_agent(x):
+    user_input = (
+        x["input"]
+        if isinstance(x, dict)
+        else x.input
+    )
 
     return {
         "messages": [
@@ -301,28 +195,22 @@ def process_request(x):
 
 
 # ============================================================
-# 9. EXTRACT FINAL RESPONSE
+# EXTRACT RESPONSE
 # ============================================================
 
 def extract_text_response(agent_output):
-
     if not isinstance(agent_output, dict):
         return str(agent_output)
 
     messages = agent_output.get("messages")
 
     if messages is None:
-
         for value in agent_output.values():
-
             if isinstance(value, dict) and "messages" in value:
-
                 messages = value["messages"]
-
                 break
 
     if messages:
-
         last_message = messages[-1]
 
         content = getattr(
@@ -331,17 +219,29 @@ def extract_text_response(agent_output):
             str(last_message)
         )
 
-        return content
+        if isinstance(content, list):
+            text_parts = []
+
+            for item in content:
+                if isinstance(item, dict):
+                    if "text" in item:
+                        text_parts.append(item["text"])
+                else:
+                    text_parts.append(str(item))
+
+            return "".join(text_parts)
+
+        return str(content)
 
     return str(agent_output)
 
 
 # ============================================================
-# 10. CREATE CHAIN
+# LANGCHAIN CHAIN
 # ============================================================
 
 formatted_agent_chain = (
-    RunnableLambda(process_request)
+    RunnableLambda(format_for_agent)
     | agent
     | RunnableLambda(extract_text_response)
 ).with_types(
@@ -351,7 +251,7 @@ formatted_agent_chain = (
 
 
 # ============================================================
-# 11. FASTAPI APPLICATION
+# FASTAPI
 # ============================================================
 
 app = FastAPI(
@@ -361,10 +261,6 @@ app = FastAPI(
 )
 
 
-# ============================================================
-# 12. LANGSERVE ROUTE
-# ============================================================
-
 add_routes(
     app,
     formatted_agent_chain,
@@ -373,7 +269,7 @@ add_routes(
 
 
 # ============================================================
-# 13. RUN SERVER
+# START SERVER
 # ============================================================
 
 if __name__ == "__main__":
