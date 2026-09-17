@@ -41,87 +41,46 @@ def change_to_f(temp_c: float) -> float:
 
 @tool
 def get_weather(city: str) -> str:
-    """Get current temperature for a given city name."""
+    """Get current weather for a given city."""
 
-    # --------------------------------------------------------
-    # Step 1: Find city coordinates
-    # --------------------------------------------------------
+    weather_api_key = os.environ.get("WEATHER_API_KEY")
 
-    geo_url = "https://geocoding-api.open-meteo.com/v1/search"
+    if not weather_api_key:
+        return "Weather API key is not configured."
 
-    geo_params = {
-        "name": city,
-        "count": 1,
-        "language": "en",
-        "format": "json"
+    weather_url = "https://api.weatherapi.com/v1/current.json"
+
+    weather_params = {
+        "key": weather_api_key,
+        "q": city,
+        "aqi": "no"
     }
 
     try:
-        geo_response = requests.get(
-            geo_url,
-            params=geo_params,
-            timeout=10
-        )
-
-        geo_response.raise_for_status()
-
-        geo_data = geo_response.json()
-
-        if "results" not in geo_data or not geo_data["results"]:
-            return f"Could not find weather data for city: {city}"
-
-        location = geo_data["results"][0]
-
-        latitude = location["latitude"]
-        longitude = location["longitude"]
-
-        # ----------------------------------------------------
-        # Step 2: Get weather information
-        # ----------------------------------------------------
-
-        weather_url = "https://api.open-meteo.com/v1/forecast"
-
-        weather_params = {
-            "latitude": latitude,
-            "longitude": longitude,
-            "current": "temperature_2m,weather_code",
-            "temperature_unit": "celsius"
-        }
-
-        weather_response = requests.get(
+        response = requests.get(
             weather_url,
             params=weather_params,
             timeout=10
         )
 
-        weather_response.raise_for_status()
+        response.raise_for_status()
 
-        weather_data = weather_response.json()
-
-        # ----------------------------------------------------
-        # Step 3: Check weather response
-        # ----------------------------------------------------
+        weather_data = response.json()
 
         if "current" not in weather_data:
             return f"Could not retrieve weather data for {city}"
 
-        current_weather = weather_data["current"]
-
-        # ----------------------------------------------------
-        # Step 4: Create result
-        # ----------------------------------------------------
+        current = weather_data["current"]
 
         result = {
-            "resolved_city": location["name"],
-            "temperature_celsius": current_weather["temperature_2m"],
-            "weather_code": current_weather["weather_code"]
+            "resolved_city": weather_data["location"]["name"],
+            "temperature_celsius": current["temp_c"],
+            "condition": current["condition"]["text"],
+            "humidity": current["humidity"],
+            "wind_kph": current["wind_kph"]
         }
 
         return json.dumps(result)
-
-    # --------------------------------------------------------
-    # Error handling
-    # --------------------------------------------------------
 
     except requests.RequestException as e:
         return f"Weather service error: {str(e)}"
@@ -142,7 +101,6 @@ tools = [
 # 2. INITIALIZE GEMINI MODEL
 # ============================================================
 
-# Get Gemini API key from environment variable
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 if not GEMINI_API_KEY:
@@ -222,10 +180,8 @@ def extract_text_response(agent_output: dict) -> str:
     if not isinstance(agent_output, dict):
         return str(agent_output)
 
-    # Check top-level messages
     messages = agent_output.get("messages")
 
-    # Check nested messages
     if messages is None:
 
         for value in agent_output.values():
@@ -234,7 +190,6 @@ def extract_text_response(agent_output: dict) -> str:
                 messages = value["messages"]
                 break
 
-    # Return final message
     if messages:
 
         last_message = messages[-1]
