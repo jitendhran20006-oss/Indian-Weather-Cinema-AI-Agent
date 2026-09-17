@@ -194,7 +194,7 @@ def process_request(x):
         city = None
 
         if " in " in text:
-            city = text.split(" in ")[-1].strip()
+            city = text.split(" in ")[-1].strip(" ?!.,")
 
         if not city:
             return "Please specify a city. Example: What is the weather in Hyderabad?"
