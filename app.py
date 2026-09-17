@@ -13,7 +13,7 @@ from langchain_core.runnables import RunnableLambda
 
 
 # ============================================================
-# 1. DEFINE TOOLS
+# 1. MOVIE TOOL
 # ============================================================
 
 @tool
@@ -23,7 +23,9 @@ def search_movies(genre: str) -> str:
     movies = {
         "sci-fi": "Cargo, 2.0, Mr. India",
         "comedy": "3 Idiots, Hera Pheri, Munna Bhai M.B.B.S.",
-        "action": "RRR, Vikram, Baahubali"
+        "action": "RRR, Vikram, Baahubali",
+        "romance": "Jab We Met, Veer-Zaara, Sita Ramam",
+        "thriller": "Drishyam, Andhadhun, Ratsasan"
     }
 
     return movies.get(
@@ -32,12 +34,20 @@ def search_movies(genre: str) -> str:
     )
 
 
+# ============================================================
+# 2. TEMPERATURE CONVERSION TOOL
+# ============================================================
+
 @tool
 def change_to_f(temp_c: float) -> float:
     """Convert Celsius temperature to Fahrenheit."""
 
     return temp_c * 1.8 + 32
 
+
+# ============================================================
+# 3. WEATHER TOOL
+# ============================================================
 
 @tool
 def get_weather(city: str) -> str:
@@ -57,6 +67,7 @@ def get_weather(city: str) -> str:
     }
 
     try:
+
         response = requests.get(
             weather_url,
             params=weather_params,
@@ -74,6 +85,7 @@ def get_weather(city: str) -> str:
 
         result = {
             "resolved_city": weather_data["location"]["name"],
+            "country": weather_data["location"]["country"],
             "temperature_celsius": current["temp_c"],
             "condition": current["condition"]["text"],
             "humidity": current["humidity"],
@@ -89,16 +101,8 @@ def get_weather(city: str) -> str:
         return f"Could not retrieve weather data: {str(e)}"
 
 
-# List of tools available to the AI agent
-tools = [
-    get_weather,
-    search_movies,
-    change_to_f
-]
-
-
 # ============================================================
-# 2. INITIALIZE GEMINI MODEL
+# 4. GEMINI API KEY
 # ============================================================
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -109,6 +113,10 @@ if not GEMINI_API_KEY:
     )
 
 
+# ============================================================
+# 5. GEMINI MODEL
+# ============================================================
+
 llm_flash = ChatGoogleGenerativeAI(
     model="gemma-4-31b-it",
     api_key=GEMINI_API_KEY,
@@ -117,25 +125,33 @@ llm_flash = ChatGoogleGenerativeAI(
 
 
 # ============================================================
-# 3. CREATE AI AGENT
+# 6. AI AGENT
 # ============================================================
+
+tools = [
+    get_weather,
+    search_movies,
+    change_to_f
+]
+
 
 agent = create_agent(
     model=llm_flash,
     tools=tools,
     system_prompt=(
-        "You are a specialized agent restricted ONLY to Indian "
-        "weather and cinema. "
+        "You are an Indian Weather and Cinema AI Agent. "
 
-        "For weather questions, use the weather tool. "
+        "You can answer questions about Indian weather and Indian movies. "
 
-        "For Indian movie questions, use the movie search tool. "
+        "For weather questions, use the get_weather tool. "
 
-        "For Celsius to Fahrenheit conversion, use the temperature "
-        "conversion tool. "
+        "For movie questions, use the search_movies tool. "
 
-        "For any other roles, topics, questions, or general knowledge "
-        "outside of Indian weather and movies, you must say exactly: "
+        "For Celsius to Fahrenheit conversion, use the change_to_f tool. "
+
+        "Do not answer unrelated general knowledge questions. "
+
+        "For questions outside Indian weather and cinema, say exactly: "
 
         "'I am not authorized to answer questions outside of Indian "
         "weather and cinema.'"
@@ -144,25 +160,138 @@ agent = create_agent(
 
 
 # ============================================================
-# 4. INPUT MODEL
+# 7. INPUT MODEL
 # ============================================================
 
 class AgentInput(BaseModel):
+
     input: str = Field(
         description="Your message to the AI agent"
     )
 
 
 # ============================================================
-# 5. FORMAT USER INPUT
+# 8. PROCESS USER REQUEST
 # ============================================================
 
-def format_for_agent(x) -> dict:
+def process_request(x):
 
     if isinstance(x, dict):
         user_input = x["input"]
     else:
         user_input = x.input
+
+    text = user_input.lower().strip()
+
+    # --------------------------------------------------------
+    # WEATHER REQUEST
+    # --------------------------------------------------------
+
+    weather_words = [
+        "weather",
+        "temperature",
+        "forecast",
+        "climate"
+    ]
+
+    if any(word in text for word in weather_words):
+
+        # Try to identify the city from common phrases
+
+        city = None
+
+        phrases = [
+            "weather in ",
+            "weather of ",
+            "temperature in ",
+            "temperature of ",
+            "forecast in ",
+            "forecast of "
+        ]
+
+        for phrase in phrases:
+
+            if phrase in text:
+
+                city = text.split(phrase, 1)[1].strip()
+
+                # Remove question marks
+                city = city.replace("?", "").strip()
+
+                break
+
+        # If city was not detected
+        if not city:
+
+            return {
+                "messages": [
+                    (
+                        "assistant",
+                        "Please specify the city you want the weather for."
+                    )
+                ]
+            }
+
+        # Call weather tool directly
+        weather_result = get_weather.invoke(city)
+
+        # ----------------------------------------------------
+        # Convert JSON weather result into readable response
+        # ----------------------------------------------------
+
+        try:
+
+            weather_data = json.loads(weather_result)
+
+            city_name = weather_data.get(
+                "resolved_city",
+                city.title()
+            )
+
+            temperature = weather_data.get(
+                "temperature_celsius",
+                "N/A"
+            )
+
+            condition = weather_data.get(
+                "condition",
+                "N/A"
+            )
+
+            humidity = weather_data.get(
+                "humidity",
+                "N/A"
+            )
+
+            wind = weather_data.get(
+                "wind_kph",
+                "N/A"
+            )
+
+            answer = (
+                f"The current weather in {city_name} is "
+                f"{temperature}°C with {condition}. "
+                f"Humidity is {humidity}% and wind speed is "
+                f"{wind} km/h."
+            )
+
+            return {
+                "messages": [
+                    ("assistant", answer)
+                ]
+            }
+
+        except Exception:
+
+            return {
+                "messages": [
+                    ("assistant", weather_result)
+                ]
+            }
+
+    # --------------------------------------------------------
+    # OTHER REQUESTS → AI AGENT
+    # --------------------------------------------------------
 
     return {
         "messages": [
@@ -172,10 +301,10 @@ def format_for_agent(x) -> dict:
 
 
 # ============================================================
-# 6. EXTRACT AI RESPONSE
+# 9. EXTRACT FINAL RESPONSE
 # ============================================================
 
-def extract_text_response(agent_output: dict) -> str:
+def extract_text_response(agent_output):
 
     if not isinstance(agent_output, dict):
         return str(agent_output)
@@ -187,7 +316,9 @@ def extract_text_response(agent_output: dict) -> str:
         for value in agent_output.values():
 
             if isinstance(value, dict) and "messages" in value:
+
                 messages = value["messages"]
+
                 break
 
     if messages:
@@ -206,11 +337,11 @@ def extract_text_response(agent_output: dict) -> str:
 
 
 # ============================================================
-# 7. CREATE LANGCHAIN CHAIN
+# 10. CREATE CHAIN
 # ============================================================
 
 formatted_agent_chain = (
-    RunnableLambda(format_for_agent)
+    RunnableLambda(process_request)
     | agent
     | RunnableLambda(extract_text_response)
 ).with_types(
@@ -220,7 +351,7 @@ formatted_agent_chain = (
 
 
 # ============================================================
-# 8. CREATE FASTAPI APPLICATION
+# 11. FASTAPI APPLICATION
 # ============================================================
 
 app = FastAPI(
@@ -230,7 +361,10 @@ app = FastAPI(
 )
 
 
-# Add LangServe route
+# ============================================================
+# 12. LANGSERVE ROUTE
+# ============================================================
+
 add_routes(
     app,
     formatted_agent_chain,
@@ -239,7 +373,7 @@ add_routes(
 
 
 # ============================================================
-# 9. RUN SERVER
+# 13. RUN SERVER
 # ============================================================
 
 if __name__ == "__main__":
