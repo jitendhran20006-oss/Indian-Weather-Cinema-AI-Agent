@@ -7,8 +7,8 @@ from langserve import add_routes
 from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import create_agent
-from pydantic import BaseModel, Field
 from langchain_core.runnables import RunnableLambda
+from pydantic import BaseModel, Field
 
 
 # ============================================================
@@ -37,21 +37,21 @@ def search_movies(genre: str) -> str:
 
 @tool
 def change_to_f(temp_c: float) -> float:
-    """Convert Celsius temperature to Fahrenheit."""
+    """Convert Celsius to Fahrenheit."""
 
     return temp_c * 1.8 + 32
 
 
 # ============================================================
-# WEATHER TOOL - OPEN-METEO
+# WEATHER FUNCTION - OPEN-METEO
 # ============================================================
 
-@tool
 def get_weather(city: str) -> str:
-    """Get current weather for a city using Open-Meteo."""
+    """Get current weather using Open-Meteo."""
 
     try:
-        # Step 1: Find city coordinates
+
+        # Find city coordinates
         geo_url = "https://geocoding-api.open-meteo.com/v1/search"
 
         geo_params = {
@@ -64,14 +64,14 @@ def get_weather(city: str) -> str:
         geo_response = requests.get(
             geo_url,
             params=geo_params,
-            timeout=10
+            timeout=15
         )
 
         geo_response.raise_for_status()
 
         geo_data = geo_response.json()
 
-        if "results" not in geo_data or not geo_data["results"]:
+        if not geo_data.get("results"):
             return f"Could not find the city: {city}"
 
         location = geo_data["results"][0]
@@ -80,7 +80,7 @@ def get_weather(city: str) -> str:
         longitude = location["longitude"]
         city_name = location["name"]
 
-        # Step 2: Get current weather
+        # Get weather
         weather_url = "https://api.open-meteo.com/v1/forecast"
 
         weather_params = {
@@ -93,7 +93,7 @@ def get_weather(city: str) -> str:
         weather_response = requests.get(
             weather_url,
             params=weather_params,
-            timeout=10
+            timeout=15
         )
 
         weather_response.raise_for_status()
@@ -107,30 +107,16 @@ def get_weather(city: str) -> str:
 
         return (
             f"The current temperature in {city_name} is "
-            f"{temperature}°C. "
-            f"Weather code: {weather_code}."
+            f"{temperature}°C. Weather code: {weather_code}."
         )
 
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
+
         return f"Weather service error: {str(e)}"
 
-    except Exception as e:
-        return f"Weather error: {str(e)}"
-
 
 # ============================================================
-# TOOLS
-# ============================================================
-
-tools = [
-    get_weather,
-    search_movies,
-    change_to_f
-]
-
-
-# ============================================================
-# GEMINI API
+# GEMINI
 # ============================================================
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -141,7 +127,7 @@ if not GEMINI_API_KEY:
     )
 
 
-llm_flash = ChatGoogleGenerativeAI(
+llm = ChatGoogleGenerativeAI(
     model="gemma-4-31b-it",
     api_key=GEMINI_API_KEY,
     temperature=0
@@ -153,97 +139,124 @@ llm_flash = ChatGoogleGenerativeAI(
 # ============================================================
 
 agent = create_agent(
-    model=llm_flash,
-    tools=tools,
+    model=llm,
+    tools=[
+        search_movies,
+        change_to_f
+    ],
     system_prompt=(
-        "You are a specialized AI agent restricted to Indian weather "
-        "and Indian cinema-related questions. "
-        "Use the available tools when appropriate. "
+        "You are a specialized AI agent for Indian cinema. "
+        "Answer Indian movie-related questions using the available tools. "
         "For questions outside Indian weather and cinema, say: "
-        "'I am not authorized to answer questions outside of Indian "
-        "weather and cinema.'"
+        "'I am not authorized to answer questions outside of Indian weather and cinema.'"
     )
 )
 
 
 # ============================================================
-# INPUT MODEL
+# REQUEST MODEL
 # ============================================================
 
 class AgentInput(BaseModel):
     input: str = Field(
-        description="Your message to the agent"
+        description="Your message to the AI agent"
     )
 
 
 # ============================================================
-# FORMAT INPUT
+# MAIN ROUTER
 # ============================================================
 
-def format_for_agent(x):
+def process_request(x):
+
     user_input = (
         x["input"]
         if isinstance(x, dict)
         else x.input
     )
 
-    return {
-        "messages": [
-            ("user", user_input)
-        ]
-    }
+    text = user_input.lower()
+
+    # --------------------------------------------
+    # WEATHER REQUEST
+    # --------------------------------------------
+
+    weather_words = [
+        "weather",
+        "temperature",
+        "climate",
+        "forecast"
+    ]
+
+    if any(word in text for word in weather_words):
+
+        # Try to extract a city after "in"
+        city = None
+
+        if " in " in text:
+            city = text.split(" in ")[-1].strip()
+
+        if not city:
+            return "Please specify a city. Example: What is the weather in Hyderabad?"
+
+        return get_weather(city)
+
+
+    # --------------------------------------------
+    # MOVIE / OTHER REQUEST
+    # --------------------------------------------
+
+    try:
+
+        result = agent.invoke({
+            "messages": [
+                ("user", user_input)
+            ]
+        })
+
+        messages = result.get("messages", [])
+
+        if messages:
+
+            last_message = messages[-1]
+
+            content = getattr(
+                last_message,
+                "content",
+                str(last_message)
+            )
+
+            if isinstance(content, list):
+
+                text_parts = []
+
+                for item in content:
+
+                    if isinstance(item, dict):
+
+                        if "text" in item:
+                            text_parts.append(item["text"])
+
+                    else:
+                        text_parts.append(str(item))
+
+                return "".join(text_parts)
+
+            return str(content)
+
+        return str(result)
+
+    except Exception as e:
+
+        return f"AI agent error: {str(e)}"
 
 
 # ============================================================
-# EXTRACT RESPONSE
+# LANGSERVE
 # ============================================================
 
-def extract_text_response(agent_output):
-    if not isinstance(agent_output, dict):
-        return str(agent_output)
-
-    messages = agent_output.get("messages")
-
-    if messages is None:
-        for value in agent_output.values():
-            if isinstance(value, dict) and "messages" in value:
-                messages = value["messages"]
-                break
-
-    if messages:
-        last_message = messages[-1]
-
-        content = getattr(
-            last_message,
-            "content",
-            str(last_message)
-        )
-
-        if isinstance(content, list):
-            text_parts = []
-
-            for item in content:
-                if isinstance(item, dict):
-                    if "text" in item:
-                        text_parts.append(item["text"])
-                else:
-                    text_parts.append(str(item))
-
-            return "".join(text_parts)
-
-        return str(content)
-
-    return str(agent_output)
-
-
-# ============================================================
-# LANGCHAIN CHAIN
-# ============================================================
-
-formatted_agent_chain = (
-    RunnableLambda(format_for_agent)
-    | agent
-    | RunnableLambda(extract_text_response)
+chain = RunnableLambda(
+    process_request
 ).with_types(
     input_type=AgentInput,
     output_type=str
@@ -263,13 +276,13 @@ app = FastAPI(
 
 add_routes(
     app,
-    formatted_agent_chain,
+    chain,
     path="/agent"
 )
 
 
 # ============================================================
-# START SERVER
+# RUN
 # ============================================================
 
 if __name__ == "__main__":
